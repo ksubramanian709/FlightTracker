@@ -1,21 +1,27 @@
 """
 Delay causality rule engine.
 
-Infers the most likely cause of a flight delay from multiple signal sources:
-  1. FAA NAS active delay programs at the departure airport
-  2. Late inbound aircraft via inbound_fa_flight_id (direct AeroAPI link)
-  3. Late inbound via tail-number rotation tracing
-  4. Weather advisories at departure or arrival airport
-  5. The flight's own reported departure_delay (fallback signal)
+Infers the most likely cause of a flight delay from multiple signal sources
+in priority order:
 
-Confidence is boosted when multiple signals agree on the same root cause.
+  0a. AviationStack per-flight IATA delay reason code (highest signal quality)
+  0b. AeroDataBox per-flight delay reason (fallback when AviationStack has none)
+  1.  Direct inbound flight late and already landed (inbound_fa_flight_id)
+  2.  Direct inbound flight still airborne — projected late arrival
+  3.  Late inbound via tail-number rotation history
+  4.  FAA NAS active delay program at departure airport
+  5.  Weather advisory (METAR/wttr flight category or advisory flag)
+  6.  Fallback: flight is significantly delayed with no external cause found
+
+Confidence is boosted when multiple signals agree on the same root cause,
+and penalised when signals conflict.
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from models import (
     AirportCondition,
@@ -26,7 +32,12 @@ from models import (
     TailLeg,
 )
 
+if TYPE_CHECKING:
+    from services.aviationstack import AviationStackSignal
+    from services.aerodatabox import AeroDataBoxSignal
+
 logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Internal signal type
@@ -37,6 +48,7 @@ class _Signal:
     cause: CauseBucket
     detail: str
     weight: float          # 0.0 – 1.0
+    source: str = ""       # e.g. "aviationstack", "aerodatabox", "aeroapi", "faa"
 
 
 # ---------------------------------------------------------------------------
@@ -85,24 +97,36 @@ def _collect_signals(
     faa_dep: AirportCondition,
     faa_arr: AirportCondition,
     inbound_flight: FlightStatus | None = None,
+    avstack_signal: "AviationStackSignal | None" = None,
+    aerodatabox_signal: "AeroDataBoxSignal | None" = None,
 ) -> list[_Signal]:
     signals: list[_Signal] = []
 
-    # --- Signal 1: FAA active delay program at departure airport ---------------
-    if faa_dep.active_programs:
-        primary_cause = _primary_faa_cause(faa_dep)
-        if "weather" in primary_cause.lower():
-            cause_bucket: CauseBucket = "weather"
-        else:
-            cause_bucket = "airport_nas"
+    # --- Signal 0a: AviationStack per-flight delay reason (best source) -------
+    if avstack_signal is not None:
         signals.append(_Signal(
-            cause=cause_bucket,
-            detail=f"FAA active program at {faa_dep.iata or faa_dep.icao}: {primary_cause}",
-            weight=0.75,
+            cause=avstack_signal.cause,
+            detail=avstack_signal.detail,
+            weight=avstack_signal.weight,
+            source="aviationstack",
         ))
 
-    # --- Signal 2: Direct inbound flight (via inbound_fa_flight_id) -----------
-    if inbound_flight and inbound_flight.arrival_delay_min > 15:
+    # --- Signal 0b: AeroDataBox delay reason (fallback) -----------------------
+    # Only use if AviationStack gave no useful reason-coded signal
+    avstack_has_reason = (
+        avstack_signal is not None
+        and avstack_signal.cause != "operational_unknown"
+    )
+    if aerodatabox_signal is not None and not avstack_has_reason:
+        signals.append(_Signal(
+            cause=aerodatabox_signal.cause,
+            detail=aerodatabox_signal.detail,
+            weight=aerodatabox_signal.weight,
+            source="aerodatabox",
+        ))
+
+    # --- Signal 1: Direct inbound flight — already landed ---------------------
+    if inbound_flight and inbound_flight.status == "landed" and inbound_flight.arrival_delay_min > 15:
         turnaround = _minutes_between(inbound_flight.estimated_arr, flight.scheduled_dep)
         turnaround_tight = turnaround is not None and turnaround < 50
         weight = 0.90 if turnaround_tight else 0.70
@@ -114,9 +138,28 @@ def _collect_signals(
         )
         if turnaround is not None:
             detail += f"; only {turnaround}min turnaround"
-        signals.append(_Signal(cause="late_inbound", detail=detail, weight=weight))
+        signals.append(_Signal(cause="late_inbound", detail=detail, weight=weight, source="aeroapi"))
 
-    # --- Signal 3: Late inbound via tail rotation history ---------------------
+    # --- Signal 2: Direct inbound flight — still airborne (blind spot fix) ----
+    elif inbound_flight and inbound_flight.status == "active" and inbound_flight.departure_delay_min > 15:
+        # Project that the inbound will arrive at least as late as it departed
+        projected_arr_delay = inbound_flight.departure_delay_min
+        turnaround = _minutes_between(inbound_flight.estimated_arr, flight.scheduled_dep)
+        detail = (
+            f"Inbound flight {inbound_flight.flight_number} is currently airborne "
+            f"and running {inbound_flight.departure_delay_min}min late; "
+            f"projected to arrive late before this departure"
+        )
+        if turnaround is not None:
+            detail += f" ({turnaround}min turnaround window)"
+        signals.append(_Signal(
+            cause="late_inbound",
+            detail=detail,
+            weight=0.65,
+            source="aeroapi",
+        ))
+
+    # --- Signal 3: Late inbound via tail rotation history --------------------
     elif tail_legs:
         now = datetime.now(timezone.utc)
         prev_legs = [
@@ -137,9 +180,20 @@ def _collect_signals(
                 )
                 if turnaround is not None:
                     detail += f"; turnaround window only {turnaround}min"
-                signals.append(_Signal(cause="late_inbound", detail=detail, weight=weight))
+                signals.append(_Signal(cause="late_inbound", detail=detail, weight=weight, source="aeroapi"))
 
-    # --- Signal 4: Weather advisory at either airport ------------------------
+    # --- Signal 4: FAA active delay program at departure airport -------------
+    if faa_dep.active_programs:
+        primary_cause = _primary_faa_cause(faa_dep)
+        cause_bucket: CauseBucket = "weather" if "weather" in primary_cause.lower() else "airport_nas"
+        signals.append(_Signal(
+            cause=cause_bucket,
+            detail=f"FAA active program at {faa_dep.iata or faa_dep.icao}: {primary_cause}",
+            weight=0.75,
+            source="faa",
+        ))
+
+    # --- Signal 5: Weather advisory at either airport ------------------------
     weather_airports = []
     if faa_dep.has_weather_advisory:
         weather_airports.append(faa_dep.iata or faa_dep.icao)
@@ -152,21 +206,41 @@ def _collect_signals(
                 cause="weather",
                 detail=f"Weather advisory active at {', '.join(weather_airports)}",
                 weight=0.55,
+                source="metar",
             ))
 
-    # --- Signal 5: Flight itself is significantly delayed with no clear cause --
-    # Use AeroAPI's reported departure_delay as a weak corroborating signal
+    # Also check METAR flight category for bad conditions at departure
+    if faa_dep.metar and faa_dep.metar.flight_category in ("IFR", "LIFR"):
+        existing_causes = {s.cause for s in signals}
+        if "weather" not in existing_causes:
+            signals.append(_Signal(
+                cause="weather",
+                detail=(
+                    f"Departure airport {faa_dep.iata or faa_dep.icao} is "
+                    f"{faa_dep.metar.flight_category} — "
+                    f"{faa_dep.metar.conditions_friendly or 'low visibility/ceiling'}"
+                ),
+                weight=0.60,
+                source="metar",
+            ))
+
+    # --- Signal 6: Fallback —- flight delayed with no external cause ----------
     if flight.departure_delay_min > 30 and not signals:
         signals.append(_Signal(
             cause="operational_unknown",
-            detail=f"Flight is {flight.departure_delay_min}min delayed; no external NAS/weather signal found — likely crew, gate, or maintenance",
+            detail=(
+                f"Flight is {flight.departure_delay_min}min delayed; "
+                f"no external NAS/weather signal found — likely crew, gate, or maintenance"
+            ),
             weight=0.35,
+            source="fallback",
         ))
     elif not signals:
         signals.append(_Signal(
             cause="operational_unknown",
             detail="No public signal found; likely crew, maintenance, or gate issue",
             weight=0.25,
+            source="fallback",
         ))
 
     return signals
@@ -202,6 +276,7 @@ _CAUSE_LABELS: dict[CauseBucket, str] = {
     "late_inbound": "Late inbound aircraft",
     "airport_nas": "Airport / NAS restriction",
     "weather": "Weather",
+    "carrier": "Airline / Carrier",
     "operational_unknown": "Operational / Unknown",
 }
 
@@ -218,18 +293,33 @@ def _build_narrative(
     dep_label = flight.origin_iata or flight.origin
     arr_label = flight.destination_iata or flight.destination
 
+    # Pull the top signal's detail for direct-source narratives
+    top_signal = signals[0] if signals else None
+
+    if cause == "carrier":
+        detail = top_signal.detail if top_signal else ""
+        # Extract the human-readable reason from the detail string
+        reason_part = detail.split("delay reason:")[-1].strip() if "delay reason:" in detail else detail
+        return (
+            f"{flight.flight_number} is delayed due to an airline/carrier issue: "
+            f"{reason_part}. "
+            f"This type of delay (crew availability, maintenance, gate conflict, or ground operations) "
+            f"is not visible in public FAA or ADS-B records."
+        )
+
     if cause == "late_inbound":
         # Prefer direct inbound flight info
         if inbound_flight and inbound_flight.arrival_delay_min > 0:
             t = _minutes_between(inbound_flight.estimated_arr, flight.scheduled_dep)
             t_str = f"only {t}min turnaround" if t is not None else "a tight turnaround"
             root = chain[0].origin if chain else (inbound_flight.origin_iata or inbound_flight.origin)
+            status_note = " (currently airborne)" if inbound_flight.status == "active" else ""
             return (
                 f"Likely delayed by a late inbound aircraft. The inbound flight "
-                f"{inbound_flight.flight_number} "
+                f"{inbound_flight.flight_number}{status_note} "
                 f"({inbound_flight.origin_iata or inbound_flight.origin} → "
                 f"{inbound_flight.destination_iata or inbound_flight.destination}) "
-                f"arrived {inbound_flight.arrival_delay_min} min late, "
+                f"is running {inbound_flight.departure_delay_min or inbound_flight.arrival_delay_min} min late, "
                 f"leaving {t_str} before this {dep_label} → {arr_label} departure. "
                 f"The delay likely originated at {root}."
             )
@@ -285,15 +375,15 @@ def _find_chain_origin(
 ) -> tuple[list[DelayChainLink], str | None]:
     chain: list[DelayChainLink] = []
 
-    # If we have the direct inbound flight, build a simple two-link chain
     if inbound_flight:
         turnaround = _minutes_between(inbound_flight.estimated_arr, flight.scheduled_dep)
-        is_root = inbound_flight.arrival_delay_min > 15
+        delay_used = inbound_flight.arrival_delay_min or inbound_flight.departure_delay_min
+        is_root = delay_used > 15
         chain.append(DelayChainLink(
             leg_callsign=inbound_flight.flight_number,
             origin=inbound_flight.origin,
             destination=inbound_flight.destination,
-            arrival_delay_min=inbound_flight.arrival_delay_min,
+            arrival_delay_min=delay_used,
             turnaround_available_min=turnaround or 0,
             is_root=is_root,
         ))
@@ -308,7 +398,6 @@ def _find_chain_origin(
         root_airport = inbound_flight.origin if is_root else None
         return chain, root_airport
 
-    # Fall back to rotation history
     if not tail_legs:
         return chain, None
 
@@ -355,16 +444,25 @@ def _predict_delay(
     tail_legs: list[TailLeg],
     faa_dep: AirportCondition,
     inbound_flight: FlightStatus | None = None,
+    avstack_signal: "AviationStackSignal | None" = None,
+    aerodatabox_signal: "AeroDataBoxSignal | None" = None,
 ) -> tuple[int, str]:
     current = flight.departure_delay_min
 
-    # Use inbound flight delay directly if available
+    # Use delay amounts from the new signals as a floor
+    third_party_delay = 0
+    if avstack_signal:
+        third_party_delay = max(third_party_delay, avstack_signal.dep_delay_min, avstack_signal.arr_delay_min)
+    if aerodatabox_signal:
+        third_party_delay = max(third_party_delay, aerodatabox_signal.dep_delay_min, aerodatabox_signal.arr_delay_min)
+
     inbound_contribution = 0
-    if inbound_flight and inbound_flight.arrival_delay_min > 0:
-        turnaround = _minutes_between(inbound_flight.estimated_arr, flight.scheduled_dep) or 0
-        min_turn = 25
-        slack = max(0, turnaround - min_turn)
-        inbound_contribution = max(0, inbound_flight.arrival_delay_min - slack)
+    if inbound_flight:
+        inbound_delay = inbound_flight.arrival_delay_min or inbound_flight.departure_delay_min
+        if inbound_delay > 0:
+            turnaround = _minutes_between(inbound_flight.estimated_arr, flight.scheduled_dep) or 0
+            slack = max(0, turnaround - 25)
+            inbound_contribution = max(0, inbound_delay - slack)
     elif tail_legs:
         prev_legs = sorted(
             [l for l in tail_legs if l.callsign.upper() != flight.flight_number.upper()],
@@ -378,7 +476,7 @@ def _predict_delay(
                 inbound_contribution = max(0, prev.arrival_delay_min - slack)
 
     faa_contribution = _faa_delay_minutes(faa_dep)
-    predicted = max(current, inbound_contribution, current + faa_contribution // 2)
+    predicted = max(current, third_party_delay, inbound_contribution, current + faa_contribution // 2)
 
     if predicted == 0:
         return 0, "On time or minimal delay expected"
@@ -402,12 +500,19 @@ async def run_delay_analysis(
     faa_dep: AirportCondition,
     faa_arr: AirportCondition,
     inbound_flight: FlightStatus | None = None,
+    avstack_signal: "AviationStackSignal | None" = None,
+    aerodatabox_signal: "AeroDataBoxSignal | None" = None,
 ) -> DelayAnalysis:
-    signals = _collect_signals(flight, tail_legs, faa_dep, faa_arr, inbound_flight)
+    signals = _collect_signals(
+        flight, tail_legs, faa_dep, faa_arr, inbound_flight,
+        avstack_signal, aerodatabox_signal,
+    )
     cause, confidence, sorted_signals = _aggregate(signals)
     chain, origin_airport = _find_chain_origin(flight, tail_legs, inbound_flight)
     narrative = _build_narrative(flight, cause, sorted_signals, tail_legs, faa_dep, chain, inbound_flight)
-    predicted_min, predicted_label = _predict_delay(flight, tail_legs, faa_dep, inbound_flight)
+    predicted_min, predicted_label = _predict_delay(
+        flight, tail_legs, faa_dep, inbound_flight, avstack_signal, aerodatabox_signal,
+    )
 
     return DelayAnalysis(
         flight_number=flight.flight_number,

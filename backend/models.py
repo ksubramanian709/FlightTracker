@@ -105,6 +105,7 @@ CauseBucket = Literal[
     "late_inbound",
     "airport_nas",
     "weather",
+    "carrier",            # Crew, maintenance, gate, fueling — airline-side causes
     "operational_unknown",
 ]
 

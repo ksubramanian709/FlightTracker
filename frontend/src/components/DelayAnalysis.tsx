@@ -1,5 +1,5 @@
 import { DelayAnalysis } from "@/lib/api";
-import { AlertTriangle, Cloud, Plane, HelpCircle, MapPin, TrendingUp } from "lucide-react";
+import { AlertTriangle, Cloud, Plane, HelpCircle, MapPin, TrendingUp, Wrench } from "lucide-react";
 
 const CAUSE_CONFIG: Record<string, { label: string; icon: React.ReactNode; color: string; bg: string }> = {
   late_inbound: {
@@ -19,6 +19,12 @@ const CAUSE_CONFIG: Record<string, { label: string; icon: React.ReactNode; color
     icon: <Cloud className="w-5 h-5" />,
     color: "text-blue-300",
     bg: "border-blue-500/30 bg-blue-500/10",
+  },
+  carrier: {
+    label: "Airline / Carrier",
+    icon: <Wrench className="w-5 h-5" />,
+    color: "text-purple-300",
+    bg: "border-purple-500/30 bg-purple-500/10",
   },
   operational_unknown: {
     label: "Operational / Unknown",

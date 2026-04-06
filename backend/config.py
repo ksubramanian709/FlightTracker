@@ -5,6 +5,12 @@ Required:
   AEROAPI_KEY              — FlightAware AeroAPI free key
                              Get one at https://flightaware.com/aeroapi/portal
 
+Optional (delay reason codes — strongly recommended):
+  AVIATIONSTACK_KEY        — free tier: 500 calls/month (HTTP only on free plan)
+                             Sign up at https://aviationstack.com
+  AERODATABOX_KEY          — RapidAPI key for AeroDataBox (free tier available)
+                             Sign up at https://rapidapi.com/aedbx-aedbx/api/aerodatabox
+
 Optional (enriches live aircraft position):
   OPENSKY_CLIENT_ID        — free account at opensky-network.org
   OPENSKY_CLIENT_SECRET
@@ -18,6 +24,13 @@ class Settings(BaseSettings):
     # FlightAware AeroAPI (required)
     aeroapi_key: str = ""
     aeroapi_base_url: str = "https://aeroapi.flightaware.com/aeroapi"
+
+    # AviationStack — per-flight IATA delay reason codes (optional but recommended)
+    # Free tier uses HTTP only; upgrade for HTTPS.
+    aviationstack_key: str = ""
+
+    # AeroDataBox via RapidAPI — delay reason fallback (optional)
+    aerodatabox_key: str = ""
 
     # OpenSky Network (optional — enriches live position)
     opensky_client_id: str = ""

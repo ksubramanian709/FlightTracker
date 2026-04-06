@@ -94,11 +94,13 @@ npm run dev
 | Variable | Required | Description |
 |---|---|---|
 | `AEROAPI_KEY` | **Yes** | FlightAware AeroAPI key. Free tier: 500 calls/month. Get it at [flightaware.com/aeroapi/portal](https://flightaware.com/aeroapi/portal/). |
+| `AVIATIONSTACK_KEY` | Recommended | Per-flight IATA delay reason codes. Free tier: 500 calls/month (HTTP only). Get it at [aviationstack.com](https://aviationstack.com). |
+| `AERODATABOX_KEY` | Recommended | Delay reason fallback via RapidAPI. Free tier at [rapidapi.com/aedbx-aedbx/api/aerodatabox](https://rapidapi.com/aedbx-aedbx/api/aerodatabox). |
 | `OPENSKY_CLIENT_ID` | No | OpenSky Network OAuth2 client ID — enriches live aircraft position. Leave blank to disable. |
 | `OPENSKY_CLIENT_SECRET` | No | OpenSky Network OAuth2 client secret. |
 | `NEXT_PUBLIC_API_URL` | No (frontend) | Backend URL; defaults to `http://localhost:8000`. Set in `frontend/.env.local` for production. |
 
-Copy `backend/.env.example` → `backend/.env` and fill in `AEROAPI_KEY`.
+Copy `backend/.env.example` → `backend/.env` and fill in `AEROAPI_KEY`. Add `AVIATIONSTACK_KEY` and `AERODATABOX_KEY` to unlock specific delay reason codes.
 
 ---
 
@@ -118,9 +120,13 @@ Copy `backend/.env.example` → `backend/.env` and fill in `AEROAPI_KEY`.
 
 | Source | Cost | What it provides |
 |---|---|---|
-| [FlightAware AeroAPI](https://flightaware.com/aeroapi/) | 500 free calls/month | Flight status, tail numbers, aircraft rotation history |
+| [FlightAware AeroAPI](https://flightaware.com/aeroapi/) | 500 free calls/month | Flight status, tail numbers, aircraft rotation history, inbound flight ID |
+| [AviationStack](https://aviationstack.com) | 500 free calls/month | Per-flight IATA delay reason codes from airline ACARS (crew, weather, NAS, gate) |
+| [AeroDataBox](https://rapidapi.com/aedbx-aedbx/api/aerodatabox) | Free tier via RapidAPI | Delay reason fallback when AviationStack has no code |
 | [FAA NAS Status](https://nasstatus.faa.gov/api/airport-status-information) | Free, no key | Active ground delay programs, ground stops, cause & trend |
 | [FAA ASWS](https://soa.smext.faa.gov/asws/api/airport/status/) | Free, no key | Per-airport weather: visibility, wind, sky, temperature |
+| [FAA Aviation Weather Center](https://aviationweather.gov/api/data/metar) | Free, no key | Live METAR observations: temp, wind, visibility, flight category |
+| [wttr.in](https://wttr.in) | Free, no key | Fallback weather for international airports not covered by AWC |
 | [OpenSky Network](https://opensky-network.org/) | Free (optional) | ADS-B arrival/departure times, live aircraft state vectors |
 
 ---

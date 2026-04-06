@@ -12,8 +12,11 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
+from config import settings
 from delay_engine import run_delay_analysis
 from models import DelayAnalysis
+from services.aerodatabox import fetch_delay_signal as aerodatabox_fetch
+from services.aviationstack import fetch_delay_signal as avstack_fetch
 from services.faa_nas import get_airport_condition
 from services.flight_adapter import get_client
 
@@ -38,15 +41,17 @@ async def delay_analysis(
 ) -> JSONResponse:
     client = get_client()
     parsed_date = _parse_date(date)
+    flight_ident = flight.strip()
 
     # Step 1: fetch flight status from FlightAware
-    flight_status = await client.get_flight_status(flight.strip(), parsed_date)
+    flight_status = await client.get_flight_status(flight_ident, parsed_date)
     if flight_status is None:
         raise HTTPException(status_code=404, detail=f"Flight '{flight}' not found in FlightAware AeroAPI")
 
     tail = flight_status.tail_number or ""
     origin = flight_status.origin or "KATL"
     destination = flight_status.destination or "KJFK"
+    iata_ident = flight_status.flight_number or flight_ident
 
     # Step 2: fetch all data sources in parallel
     async def _empty_legs() -> list:
@@ -57,18 +62,39 @@ async def delay_analysis(
             return await client.get_flight_by_fa_id(flight_status.inbound_fa_flight_id)
         return None
 
-    tail_task = client.get_tail_history(tail, parsed_date) if tail else _empty_legs()
-    faa_dep_task = get_airport_condition(origin)
-    faa_arr_task = get_airport_condition(destination)
-    inbound_task = _fetch_inbound()
+    async def _fetch_avstack():
+        return await avstack_fetch(iata_ident, settings.aviationstack_key)
 
-    tail_legs, faa_dep, faa_arr, inbound_flight = await asyncio.gather(
-        tail_task, faa_dep_task, faa_arr_task, inbound_task
+    async def _fetch_aerodatabox():
+        return await aerodatabox_fetch(iata_ident, settings.aerodatabox_key)
+
+    tail_task = client.get_tail_history(tail, parsed_date) if tail else _empty_legs()
+
+    (
+        tail_legs,
+        faa_dep,
+        faa_arr,
+        inbound_flight,
+        avstack_signal,
+        aerodatabox_signal,
+    ) = await asyncio.gather(
+        tail_task,
+        get_airport_condition(origin),
+        get_airport_condition(destination),
+        _fetch_inbound(),
+        _fetch_avstack(),
+        _fetch_aerodatabox(),
     )
 
     # Step 3: run delay causality engine
     result = await run_delay_analysis(
-        flight_status, tail_legs, faa_dep, faa_arr, inbound_flight
+        flight_status,
+        tail_legs,
+        faa_dep,
+        faa_arr,
+        inbound_flight,
+        avstack_signal,
+        aerodatabox_signal,
     )
 
     response = JSONResponse(content=result.model_dump(mode="json"))
