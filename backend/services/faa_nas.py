@@ -16,7 +16,7 @@ import xmltodict
 
 from config import settings
 from models import AirportCondition, DelayProgram, METARWeather
-from services.weather import fetch_metar
+from services.weather import fetch_metar, fetch_wttr_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +220,11 @@ async def get_airport_condition(raw_code: str) -> AirportCondition:
         fetch_faa_nas_all(),
         fetch_metar(icao),
     )
+
+    # FAA Aviation Weather Center only covers US airports; fall back to wttr.in
+    # for international airports (OMDB, EGLL, etc.) or whenever AWC returns nothing.
+    if metar is None and iata:
+        metar = await fetch_wttr_fallback(iata)
 
     status = asws_data.get("Status", {}) or {}
     delay_flag = bool(status.get("ClosureBegin") or asws_data.get("Delay", False))

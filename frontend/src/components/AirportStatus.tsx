@@ -261,7 +261,7 @@ function AirportCard({
       {/* METAR weather block */}
       {airport.metar ? (
         <METARPanel metar={airport.metar} />
-      ) : (
+      ) : airport.visibility || airport.wind || airport.temperature || airport.sky ? (
         /* Fallback: ASWS text fields */
         <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
           {airport.visibility && (
@@ -289,6 +289,8 @@ function AirportCard({
             </div>
           )}
         </div>
+      ) : (
+        <p className="text-xs text-slate-600 italic">Weather data unavailable</p>
       )}
 
       {/* FAA delay programs */}

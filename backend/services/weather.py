@@ -129,6 +129,172 @@ def _humidity(temp_c: float | None, dewp_c: float | None) -> int | None:
     return round(rh)
 
 
+_WTTR_URL = "https://wttr.in/{location}?format=j1"
+
+# Weather code → friendly condition string (wttr.in / WorldWeatherOnline codes)
+_WTTR_CODES: dict[int, str] = {
+    113: "Clear",
+    116: "Partly Cloudy",
+    119: "Cloudy",
+    122: "Overcast",
+    143: "Mist",
+    176: "Light Rain Showers",
+    179: "Light Snow Showers",
+    182: "Sleet",
+    185: "Light Freezing Drizzle",
+    200: "Thunderstorm",
+    227: "Blowing Snow",
+    230: "Blizzard",
+    248: "Fog",
+    260: "Freezing Fog",
+    263: "Light Drizzle",
+    266: "Light Drizzle",
+    281: "Freezing Drizzle",
+    284: "Heavy Freezing Drizzle",
+    293: "Light Rain",
+    296: "Light Rain",
+    299: "Moderate Rain",
+    302: "Moderate Rain",
+    305: "Heavy Rain",
+    308: "Heavy Rain",
+    311: "Light Freezing Rain",
+    314: "Moderate Freezing Rain",
+    317: "Light Sleet",
+    320: "Moderate Sleet",
+    323: "Light Snow",
+    326: "Light Snow",
+    329: "Moderate Snow",
+    332: "Heavy Snow",
+    335: "Heavy Snow",
+    338: "Heavy Snow",
+    350: "Ice Pellets",
+    353: "Light Rain Showers",
+    356: "Moderate Rain Showers",
+    359: "Heavy Rain Showers",
+    362: "Light Sleet Showers",
+    365: "Moderate Sleet Showers",
+    368: "Light Snow Showers",
+    371: "Moderate Snow Showers",
+    374: "Light Ice Pellet Showers",
+    377: "Moderate Ice Pellet Showers",
+    386: "Thunderstorm with Rain",
+    389: "Heavy Thunderstorm with Rain",
+    392: "Thunderstorm with Snow",
+    395: "Heavy Blizzard",
+}
+
+
+def _wttr_flight_category(vis_km: float) -> str:
+    """Estimate ICAO flight category from visibility in km."""
+    vis_sm = vis_km * 0.621371
+    if vis_sm >= 5:
+        return "VFR"
+    if vis_sm >= 3:
+        return "MVFR"
+    if vis_sm >= 1:
+        return "IFR"
+    return "LIFR"
+
+
+async def fetch_wttr_fallback(iata_or_city: str) -> METARWeather | None:
+    """
+    Fallback weather via wttr.in (WorldWeatherOnline) for airports where
+    the FAA Aviation Weather Center has no METAR (e.g. international airports).
+    Accepts IATA code or city name.
+    """
+    url = _WTTR_URL.format(location=iata_or_city.upper())
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.get(url, headers={"Accept": "application/json"})
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("wttr.in fallback failed for %s: %s", iata_or_city, exc)
+            return None
+
+    try:
+        cur = data["current_condition"][0]
+    except (KeyError, IndexError):
+        return None
+
+    temp_c_raw = cur.get("temp_C")
+    temp_f_raw = cur.get("temp_F")
+    humidity_raw = cur.get("humidity")
+    wind_kmph = cur.get("windspeedKmph")
+    wind_deg = cur.get("winddirDegree")
+    wind_16pt = cur.get("winddir16Point", "")
+    vis_km_raw = cur.get("visibility")
+    pressure_raw = cur.get("pressure")
+    wx_code_raw = cur.get("weatherCode")
+    wx_desc_list = cur.get("weatherDesc", [])
+
+    try:
+        temp_c: float | None = round(float(temp_c_raw), 1)
+    except (TypeError, ValueError):
+        temp_c = None
+
+    try:
+        temp_f: float | None = round(float(temp_f_raw), 1)
+    except (TypeError, ValueError):
+        temp_f = _c_to_f(temp_c)
+
+    try:
+        humidity_pct: int | None = int(humidity_raw)
+    except (TypeError, ValueError):
+        humidity_pct = None
+
+    # km/h → knots (1 kt = 1.852 km/h)
+    try:
+        wind_kt: int | None = round(float(wind_kmph) / 1.852)
+    except (TypeError, ValueError):
+        wind_kt = None
+
+    try:
+        wind_direction: int | None = int(wind_deg)
+    except (TypeError, ValueError):
+        wind_direction = None
+
+    wind_dir_label = f"{wind_16pt} ({wind_direction}°)" if wind_16pt and wind_direction is not None else wind_16pt
+
+    try:
+        vis_km = float(vis_km_raw)
+        vis_sm_val = vis_km * 0.621371
+        vis_str = f"{vis_sm_val:.0f} SM" if vis_sm_val < 10 else "10+ SM"
+        flight_cat = _wttr_flight_category(vis_km)
+    except (TypeError, ValueError):
+        vis_str = ""
+        vis_km = 10.0
+        flight_cat = "VFR"
+
+    # hPa → inHg (1 hPa = 0.02953 inHg)
+    try:
+        altim: float | None = round(float(pressure_raw) * 0.02953, 2)
+    except (TypeError, ValueError):
+        altim = None
+
+    try:
+        wx_code = int(wx_code_raw)
+        conditions_friendly = _WTTR_CODES.get(wx_code, "")
+    except (TypeError, ValueError):
+        conditions_friendly = ""
+
+    if not conditions_friendly and wx_desc_list:
+        conditions_friendly = wx_desc_list[0].get("value", "")
+
+    return METARWeather(
+        temp_c=temp_c,
+        temp_f=temp_f,
+        humidity_pct=humidity_pct,
+        wind_direction=wind_direction,
+        wind_direction_label=wind_dir_label,
+        wind_speed_kt=wind_kt,
+        visibility_sm=vis_str,
+        conditions_friendly=conditions_friendly,
+        altimeter_inhg=altim,
+        flight_category=flight_cat,
+    )
+
+
 async def fetch_metar(icao: str) -> METARWeather | None:
     """Fetch latest METAR for an airport and return a structured METARWeather object."""
     icao = icao.upper()
