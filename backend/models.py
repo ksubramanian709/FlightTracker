@@ -20,6 +20,26 @@ class DelayProgram(BaseModel):
     trend: str         # "Increasing" | "Decreasing" | "Stable"
 
 
+class METARWeather(BaseModel):
+    """Decoded METAR observation from FAA Aviation Weather Center."""
+    temp_c: float | None = None
+    temp_f: float | None = None
+    dewpoint_c: float | None = None
+    humidity_pct: int | None = None
+    wind_direction: int | None = None         # degrees true
+    wind_direction_label: str = ""            # e.g. "SW (220°)"
+    wind_speed_kt: int | None = None
+    wind_gust_kt: int | None = None
+    visibility_sm: str = ""                   # e.g. "10+ SM"
+    conditions: str = ""                      # raw wx string, e.g. "-RA"
+    conditions_friendly: str = ""             # e.g. "Light Rain"
+    sky_summary: str = ""                     # e.g. "Broken clouds at 2,500 ft"
+    altimeter_inhg: float | None = None
+    raw_metar: str = ""
+    flight_category: str = ""                 # VFR | MVFR | IFR | LIFR
+    clouds: list[dict] = []
+
+
 class AirportCondition(BaseModel):
     icao: str
     iata: str
@@ -33,6 +53,7 @@ class AirportCondition(BaseModel):
     wind: str = ""
     sky: str = ""
     temperature: str = ""
+    metar: METARWeather | None = None
     raw_status: dict = {}
 
 

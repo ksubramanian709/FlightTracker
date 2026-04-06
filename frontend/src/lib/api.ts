@@ -7,6 +7,25 @@ export interface DelayProgram {
   trend: string;
 }
 
+export interface METARWeather {
+  temp_c: number | null;
+  temp_f: number | null;
+  dewpoint_c: number | null;
+  humidity_pct: number | null;
+  wind_direction: number | null;
+  wind_direction_label: string;
+  wind_speed_kt: number | null;
+  wind_gust_kt: number | null;
+  visibility_sm: string;
+  conditions: string;
+  conditions_friendly: string;
+  sky_summary: string;
+  altimeter_inhg: number | null;
+  raw_metar: string;
+  flight_category: string;
+  clouds: { cover: string; base: number | null }[];
+}
+
 export interface AirportCondition {
   icao: string;
   iata: string;
@@ -20,6 +39,7 @@ export interface AirportCondition {
   wind: string;
   sky: string;
   temperature: string;
+  metar: METARWeather | null;
 }
 
 export interface FlightStatus {

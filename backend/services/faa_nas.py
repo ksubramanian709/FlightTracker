@@ -15,7 +15,8 @@ import httpx
 import xmltodict
 
 from config import settings
-from models import AirportCondition, DelayProgram
+from models import AirportCondition, DelayProgram, METARWeather
+from services.weather import fetch_metar
 
 logger = logging.getLogger(__name__)
 
@@ -212,11 +213,12 @@ async def get_airport_condition(raw_code: str) -> AirportCondition:
     iata = icao_to_iata(icao)
     name = _airport_name(icao)
 
-    # Fetch both concurrently
+    # Fetch all three sources concurrently
     import asyncio
-    asws_data, nas_data = await asyncio.gather(
+    asws_data, nas_data, metar = await asyncio.gather(
         fetch_asws_status(icao),
         fetch_faa_nas_all(),
+        fetch_metar(icao),
     )
 
     status = asws_data.get("Status", {}) or {}
@@ -224,6 +226,13 @@ async def get_airport_condition(raw_code: str) -> AirportCondition:
 
     programs = _extract_programs_for_airport(nas_data, icao)
     weather_summary, has_weather = _build_weather_summary(asws_data)
+
+    # Upgrade advisory flag if METAR shows bad conditions
+    if metar and not has_weather:
+        bad_wx = any(kw in (metar.conditions_friendly + metar.sky_summary).lower()
+                     for kw in ("rain", "snow", "fog", "mist", "thunder", "ice", "hail", "storm", "drizzle"))
+        low_vis = metar.flight_category in ("IFR", "LIFR", "MVFR")
+        has_weather = bad_wx or low_vis
 
     weather_block = asws_data.get("Weather", {}) or {}
 
@@ -240,5 +249,6 @@ async def get_airport_condition(raw_code: str) -> AirportCondition:
         wind=str(weather_block.get("Wind", "")),
         sky=str(weather_block.get("Sky", "")),
         temperature=str(weather_block.get("Temp", "")),
+        metar=metar,
         raw_status=status,
     )
