@@ -71,6 +71,8 @@ class FlightStatus(BaseModel):
     departure_delay_min: int = 0
     arrival_delay_min: int = 0
     status: Literal["scheduled", "active", "landed", "cancelled", "diverted", "unknown"] = "unknown"
+    inbound_fa_flight_id: str | None = None   # previous leg's AeroAPI flight ID
+    fa_flight_id: str | None = None           # this flight's AeroAPI flight ID
     data_source: Literal["aeroapi"] = "aeroapi"
 
 
