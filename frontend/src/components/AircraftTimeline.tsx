@@ -1,15 +1,6 @@
 import { TailLeg, DelayChainLink } from "@/lib/api";
+import { fmtTime, fmtDate } from "@/lib/format";
 import { Plane, AlertCircle, CheckCircle, Clock } from "lucide-react";
-
-function fmt(iso: string | null) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-}
-
-function fmtDate(iso: string | null) {
-  if (!iso) return "";
-  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
 
 function LegRow({ leg, isLast, chainLink }: { leg: TailLeg; isLast: boolean; chainLink?: DelayChainLink }) {
   const isLate = leg.arrival_delay_min > 15;
@@ -63,11 +54,11 @@ function LegRow({ leg, isLast, chainLink }: { leg: TailLeg; isLast: boolean; cha
         <div className="mt-2 grid grid-cols-2 gap-3 text-xs text-slate-400">
           <div className="flex items-center gap-1">
             <Clock className="w-3 h-3" />
-            <span>Dep: {fmt(leg.actual_dep)} {leg.actual_dep ? `(${fmtDate(leg.actual_dep)})` : ""}</span>
+            <span>Dep: {fmtTime(leg.actual_dep)} {leg.actual_dep ? `(${fmtDate(leg.actual_dep)})` : ""}</span>
           </div>
           <div className="flex items-center gap-1">
             <Clock className="w-3 h-3" />
-            <span>Arr: {fmt(leg.actual_arr)}</span>
+            <span>Arr: {fmtTime(leg.actual_arr)}</span>
           </div>
         </div>
 

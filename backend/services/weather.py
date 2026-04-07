@@ -68,13 +68,6 @@ _CLOUD_FRIENDLY: dict[str, str] = {
     "VV":  "Vertical visibility (obscured)",
 }
 
-_CATEGORY_LABEL: dict[str, str] = {
-    "VFR":  "VFR",
-    "MVFR": "MVFR",
-    "IFR":  "IFR",
-    "LIFR": "LIFR",
-}
-
 
 def _c_to_f(c: float | None) -> float | None:
     if c is None:

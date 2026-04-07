@@ -1,10 +1,6 @@
 import { FlightStatus } from "@/lib/api";
+import { fmtTime } from "@/lib/format";
 import { Plane, Clock, ArrowRight } from "lucide-react";
-
-function fmt(iso: string | null) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
-}
 
 function statusBadge(status: string) {
   const map: Record<string, string> = {
@@ -75,12 +71,12 @@ export default function FlightCard({ flight }: { flight: FlightStatus }) {
           <div className="flex gap-3">
             <div>
               <p className="text-slate-400 text-xs">Scheduled</p>
-              <p className="font-medium">{fmt(flight.scheduled_dep)}</p>
+              <p className="font-medium">{fmtTime(flight.scheduled_dep)}</p>
             </div>
             <div>
               <p className="text-slate-400 text-xs">Estimated</p>
               <p className={`font-medium ${flight.departure_delay_min > 0 ? "text-red-400" : "text-green-400"}`}>
-                {fmt(flight.estimated_dep)}
+                {fmtTime(flight.estimated_dep)}
               </p>
             </div>
           </div>
@@ -92,12 +88,12 @@ export default function FlightCard({ flight }: { flight: FlightStatus }) {
           <div className="flex gap-3">
             <div>
               <p className="text-slate-400 text-xs">Scheduled</p>
-              <p className="font-medium">{fmt(flight.scheduled_arr)}</p>
+              <p className="font-medium">{fmtTime(flight.scheduled_arr)}</p>
             </div>
             <div>
               <p className="text-slate-400 text-xs">Estimated</p>
               <p className={`font-medium ${flight.arrival_delay_min > 0 ? "text-red-400" : "text-green-400"}`}>
-                {fmt(flight.estimated_arr)}
+                {fmtTime(flight.estimated_arr)}
               </p>
             </div>
           </div>

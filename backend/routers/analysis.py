@@ -6,7 +6,6 @@ Orchestrates all data sources and runs the delay causality engine.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
@@ -19,19 +18,9 @@ from services.aerodatabox import fetch_delay_signal as aerodatabox_fetch
 from services.aviationstack import fetch_delay_signal as avstack_fetch
 from services.faa_nas import get_airport_condition
 from services.flight_adapter import get_client
+from utils import parse_date
 
 router = APIRouter()
-
-
-def _parse_date(date_str: str | None) -> datetime | None:
-    if not date_str:
-        return None
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
-        try:
-            return datetime.strptime(date_str, fmt)
-        except ValueError:
-            continue
-    return None
 
 
 @router.get("/delay-analysis", response_model=DelayAnalysis)
@@ -42,6 +31,7 @@ async def delay_analysis(
     client = get_client()
     parsed_date = _parse_date(date)
     flight_ident = flight.strip()
+    parsed_date = parse_date(date)
 
     # Step 1: fetch flight status from FlightAware
     flight_status = await client.get_flight_status(flight_ident, parsed_date)

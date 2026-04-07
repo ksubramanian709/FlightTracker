@@ -19,7 +19,7 @@ and penalised when signals conflict.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
 
@@ -142,8 +142,6 @@ def _collect_signals(
 
     # --- Signal 2: Direct inbound flight — still airborne (blind spot fix) ----
     elif inbound_flight and inbound_flight.status == "active" and inbound_flight.departure_delay_min > 15:
-        # Project that the inbound will arrive at least as late as it departed
-        projected_arr_delay = inbound_flight.departure_delay_min
         turnaround = _minutes_between(inbound_flight.estimated_arr, flight.scheduled_dep)
         detail = (
             f"Inbound flight {inbound_flight.flight_number} is currently airborne "
