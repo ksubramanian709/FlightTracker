@@ -48,6 +48,7 @@ app.include_router(analysis.router, prefix="/api", tags=["analysis"])
 async def health() -> dict:
     return {
         "status": "ok",
+        "version": "03fd34c",
         "data_source": "FlightAware AeroAPI",
         "faa_nas": "enabled",
         "opensky": "enabled" if settings.opensky_enabled else "disabled (optional)",
