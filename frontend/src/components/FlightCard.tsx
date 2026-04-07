@@ -1,5 +1,6 @@
 import { FlightStatus } from "@/lib/api";
 import { fmtTime } from "@/lib/format";
+import FlightProgress from "@/components/FlightProgress";
 import { Plane, Clock, ArrowRight } from "lucide-react";
 
 function statusBadge(status: string) {
@@ -45,21 +46,31 @@ export default function FlightCard({ flight }: { flight: FlightStatus }) {
       </div>
 
       {/* Route */}
-      <div className="flex items-center gap-4 py-4 border-y border-slate-800">
-        <div className="text-center">
-          <p className="text-3xl font-bold">{flight.origin_iata || flight.origin}</p>
-          <p className="text-xs text-slate-500 mt-1">Departure</p>
+      <div className="py-4 border-y border-slate-800 space-y-3">
+        <div className="flex items-center gap-4">
+          <div className="text-center">
+            <p className="text-3xl font-bold">{flight.origin_iata || flight.origin}</p>
+            <p className="text-xs text-slate-500 mt-1">Departure</p>
+          </div>
+          <div className="flex-1 flex flex-col items-center gap-1">
+            {flight.status === "active" ? null : <ArrowRight className="w-5 h-5 text-slate-600" />}
+            {flight.tail_number && (
+              <span className="text-xs text-slate-500">{flight.tail_number}</span>
+            )}
+          </div>
+          <div className="text-center">
+            <p className="text-3xl font-bold">{flight.destination_iata || flight.destination}</p>
+            <p className="text-xs text-slate-500 mt-1">Arrival</p>
+          </div>
         </div>
-        <div className="flex-1 flex flex-col items-center gap-1">
-          <ArrowRight className="w-5 h-5 text-slate-600" />
-          {flight.tail_number && (
-            <span className="text-xs text-slate-500">{flight.tail_number}</span>
-          )}
-        </div>
-        <div className="text-center">
-          <p className="text-3xl font-bold">{flight.destination_iata || flight.destination}</p>
-          <p className="text-xs text-slate-500 mt-1">Arrival</p>
-        </div>
+
+        {/* Live progress bar — only shown for in-flight */}
+        {flight.status === "active" && (
+          <FlightProgress
+            estimatedDep={flight.estimated_dep}
+            estimatedArr={flight.estimated_arr}
+          />
+        )}
       </div>
 
       {/* Times grid */}
