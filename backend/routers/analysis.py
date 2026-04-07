@@ -29,7 +29,6 @@ async def delay_analysis(
     date: Annotated[str | None, Query(description="Date YYYY-MM-DD (default: today)")] = None,
 ) -> JSONResponse:
     client = get_client()
-    parsed_date = _parse_date(date)
     flight_ident = flight.strip()
     parsed_date = parse_date(date)
 
