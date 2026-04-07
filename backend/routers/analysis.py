@@ -6,10 +6,14 @@ Orchestrates all data sources and runs the delay causality engine.
 from __future__ import annotations
 
 import asyncio
+import logging
+import traceback
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 from config import settings
 from delay_engine import run_delay_analysis
@@ -59,32 +63,42 @@ async def delay_analysis(
 
     tail_task = client.get_tail_history(tail, parsed_date) if tail else _empty_legs()
 
-    (
-        tail_legs,
-        faa_dep,
-        faa_arr,
-        inbound_flight,
-        avstack_signal,
-        aerodatabox_signal,
-    ) = await asyncio.gather(
-        tail_task,
-        get_airport_condition(origin),
-        get_airport_condition(destination),
-        _fetch_inbound(),
-        _fetch_avstack(),
-        _fetch_aerodatabox(),
-    )
+    try:
+        (
+            tail_legs,
+            faa_dep,
+            faa_arr,
+            inbound_flight,
+            avstack_signal,
+            aerodatabox_signal,
+        ) = await asyncio.gather(
+            tail_task,
+            get_airport_condition(origin),
+            get_airport_condition(destination),
+            _fetch_inbound(),
+            _fetch_avstack(),
+            _fetch_aerodatabox(),
+        )
+    except Exception as exc:
+        tb = traceback.format_exc()
+        logger.error("delay_analysis gather error for %s: %s\n%s", flight_ident, exc, tb)
+        raise HTTPException(status_code=500, detail=f"Data gather error: {exc}\n\n{tb}") from exc
 
     # Step 3: run delay causality engine
-    result = await run_delay_analysis(
-        flight_status,
-        tail_legs,
-        faa_dep,
-        faa_arr,
-        inbound_flight,
-        avstack_signal,
-        aerodatabox_signal,
-    )
+    try:
+        result = await run_delay_analysis(
+            flight_status,
+            tail_legs,
+            faa_dep,
+            faa_arr,
+            inbound_flight,
+            avstack_signal,
+            aerodatabox_signal,
+        )
+    except Exception as exc:
+        tb = traceback.format_exc()
+        logger.error("delay_analysis engine error for %s: %s\n%s", flight_ident, exc, tb)
+        raise HTTPException(status_code=500, detail=f"Delay engine error: {exc}\n\n{tb}") from exc
 
     response = JSONResponse(content=result.model_dump(mode="json"))
     response.headers["Cache-Control"] = "public, max-age=90"
