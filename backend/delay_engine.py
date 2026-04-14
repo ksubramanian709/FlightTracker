@@ -36,6 +36,17 @@ if TYPE_CHECKING:
     from services.aviationstack import AviationStackSignal
     from services.aerodatabox import AeroDataBoxSignal
 
+# Human-readable source labels shown in the UI
+_SOURCE_LABELS: dict[str, str] = {
+    "aviationstack": "AviationStack (airline ACARS)",
+    "aerodatabox":   "AeroDataBox",
+    "aeroapi":       "FlightAware AeroAPI",
+    "faa":           "FAA NAS",
+    "metar":         "FAA METAR / wttr.in",
+    "taf":           "FAA TAF forecast",
+    "fallback":      "Heuristic fallback",
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -99,6 +110,7 @@ def _collect_signals(
     inbound_flight: FlightStatus | None = None,
     avstack_signal: "AviationStackSignal | None" = None,
     aerodatabox_signal: "AeroDataBoxSignal | None" = None,
+    taf_dep: dict | None = None,
 ) -> list[_Signal]:
     signals: list[_Signal] = []
 
@@ -222,6 +234,25 @@ def _collect_signals(
                 source="metar",
             ))
 
+    # --- Signal: TAF forecast shows adverse weather at departure airport ------
+    if taf_dep:
+        existing_wx = any(s.cause == "weather" for s in signals)
+        taf_weight = 0.65 if taf_dep.get("has_low_ceiling_or_vis") else 0.50
+        if not existing_wx:
+            signals.append(_Signal(
+                cause="weather",
+                detail=f"TAF forecast at {faa_dep.iata or faa_dep.icao}: {taf_dep['description']}",
+                weight=taf_weight,
+                source="taf",
+            ))
+        else:
+            # TAF corroborates an existing weather signal — boost it
+            for s in signals:
+                if s.cause == "weather":
+                    s.weight = min(0.95, s.weight + 0.08)
+                    s.detail += f"; corroborated by TAF ({taf_dep['description']})"
+                    break
+
     # --- Signal 6: Fallback —- flight delayed with no external cause ----------
     if flight.departure_delay_min > 30 and not signals:
         signals.append(_Signal(
@@ -244,22 +275,48 @@ def _collect_signals(
     return signals
 
 
-def _aggregate(signals: list[_Signal]) -> tuple[CauseBucket, float, list[_Signal]]:
+def _aggregate(signals: list[_Signal]) -> tuple[CauseBucket, float, list[_Signal], list[str]]:
+    """
+    Returns (cause, confidence, sorted_signals, data_sources_used).
+
+    Confidence is built from:
+    - The highest-quality signal's base weight
+    - A boost for each *additional independent source type* that agrees (+0.07 each, max +0.21)
+    - A penalty for each independent source type that conflicts (-0.12 each, max -0.24)
+    - operational_unknown is capped at 0.42 so it never looks like a confident call
+    """
     if not signals:
-        return "operational_unknown", 0.20, signals
+        return "operational_unknown", 0.15, signals, []
 
     sorted_sigs = sorted(signals, key=lambda s: -s.weight)
     dominant = sorted_sigs[0]
-    base_confidence = dominant.weight
+    base = dominant.weight
 
-    agreeing = [s for s in signals if s.cause == dominant.cause]
-    conflicting = [s for s in signals if s.cause != dominant.cause and s.cause != "operational_unknown"]
+    # Count unique data-source types (not individual signals) that agree/conflict
+    agreeing_sources  = {s.source for s in signals if s.cause == dominant.cause}
+    conflicting_sources = {
+        s.source for s in signals
+        if s.cause != dominant.cause and s.cause != "operational_unknown"
+    }
 
-    boost = min(0.15, 0.05 * (len(agreeing) - 1))
-    penalty = min(0.20, 0.10 * len(conflicting))
+    # Each additional independent source agreeing adds meaningful confidence
+    source_boost   = min(0.21, 0.07 * max(0, len(agreeing_sources) - 1))
+    # Each conflicting independent source is a genuine uncertainty signal
+    conflict_penalty = min(0.24, 0.12 * len(conflicting_sources))
 
-    confidence = min(0.97, max(0.10, base_confidence + boost - penalty))
-    return dominant.cause, confidence, sorted_sigs
+    raw = base + source_boost - conflict_penalty
+
+    # operational_unknown means we truly don't know — cap it to communicate uncertainty
+    if dominant.cause == "operational_unknown":
+        raw = min(0.42, raw)
+
+    confidence = min(0.97, max(0.10, raw))
+
+    # Build list of human-readable source names for display
+    all_sources = sorted({s.source for s in signals} - {"fallback"})
+    data_sources = [_SOURCE_LABELS.get(src, src) for src in all_sources]
+
+    return dominant.cause, confidence, sorted_sigs, data_sources
 
 
 def _confidence_label(c: float) -> Literal["high", "medium", "low"]:
@@ -500,17 +557,21 @@ async def run_delay_analysis(
     inbound_flight: FlightStatus | None = None,
     avstack_signal: "AviationStackSignal | None" = None,
     aerodatabox_signal: "AeroDataBoxSignal | None" = None,
+    taf_dep: dict | None = None,
 ) -> DelayAnalysis:
     signals = _collect_signals(
         flight, tail_legs, faa_dep, faa_arr, inbound_flight,
-        avstack_signal, aerodatabox_signal,
+        avstack_signal, aerodatabox_signal, taf_dep,
     )
-    cause, confidence, sorted_signals = _aggregate(signals)
+    cause, confidence, sorted_signals, data_sources = _aggregate(signals)
     chain, origin_airport = _find_chain_origin(flight, tail_legs, inbound_flight)
     narrative = _build_narrative(flight, cause, sorted_signals, tail_legs, faa_dep, chain, inbound_flight)
     predicted_min, predicted_label = _predict_delay(
         flight, tail_legs, faa_dep, inbound_flight, avstack_signal, aerodatabox_signal,
     )
+
+    # Count real (non-fallback) signals that fired
+    sources_confirmed = len({s.source for s in signals if s.source != "fallback"})
 
     return DelayAnalysis(
         flight_number=flight.flight_number,
@@ -524,5 +585,7 @@ async def run_delay_analysis(
         predicted_delay_min=predicted_min,
         predicted_delay_label=predicted_label,
         signals_used=[s.detail for s in sorted_signals],
+        data_sources=data_sources,
+        sources_confirmed=sources_confirmed,
         data_mode="live",
     )

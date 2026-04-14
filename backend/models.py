@@ -131,4 +131,6 @@ class DelayAnalysis(BaseModel):
     predicted_delay_min: int = 0
     predicted_delay_label: str = ""
     signals_used: list[str] = []
+    data_sources: list[str] = []       # human-readable list of sources checked
+    sources_confirmed: int = 0         # number of independent sources that fired
     data_mode: Literal["live"] = "live"

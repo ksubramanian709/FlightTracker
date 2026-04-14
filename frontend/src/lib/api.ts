@@ -97,6 +97,8 @@ export interface DelayAnalysis {
   predicted_delay_min: number;
   predicted_delay_label: string;
   signals_used: string[];
+  data_sources: string[];
+  sources_confirmed: number;
   data_mode: string;
 }
 

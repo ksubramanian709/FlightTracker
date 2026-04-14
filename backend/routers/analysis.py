@@ -22,6 +22,7 @@ from services.aerodatabox import fetch_delay_signal as aerodatabox_fetch
 from services.aviationstack import fetch_delay_signal as avstack_fetch
 from services.faa_nas import get_airport_condition
 from services.flight_adapter import get_client
+from services.taf import fetch_taf_signal
 from utils import parse_date
 
 router = APIRouter()
@@ -61,6 +62,9 @@ async def delay_analysis(
     async def _fetch_aerodatabox():
         return await aerodatabox_fetch(iata_ident, settings.aerodatabox_key)
 
+    async def _fetch_taf():
+        return await fetch_taf_signal(origin)
+
     tail_task = client.get_tail_history(tail, parsed_date) if tail else _empty_legs()
 
     try:
@@ -71,6 +75,7 @@ async def delay_analysis(
             inbound_flight,
             avstack_signal,
             aerodatabox_signal,
+            taf_dep,
         ) = await asyncio.gather(
             tail_task,
             get_airport_condition(origin),
@@ -78,6 +83,7 @@ async def delay_analysis(
             _fetch_inbound(),
             _fetch_avstack(),
             _fetch_aerodatabox(),
+            _fetch_taf(),
         )
     except Exception as exc:
         tb = traceback.format_exc()
@@ -94,6 +100,7 @@ async def delay_analysis(
             inbound_flight,
             avstack_signal,
             aerodatabox_signal,
+            taf_dep,
         )
     except Exception as exc:
         tb = traceback.format_exc()
